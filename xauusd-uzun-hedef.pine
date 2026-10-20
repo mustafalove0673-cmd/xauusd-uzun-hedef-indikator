@@ -1,25 +1,25 @@
 //@version=6
-indicator("MARK XAUUSD UZUN HEDEF v2", shorttitle="XAU UZUN", overlay=true, max_lines_count=500, max_labels_count=500, max_bars_back=2000)
+indicator("MARK XAUUSD UZUN HEDEF v3", shorttitle="XAU UZUN", overlay=true, max_lines_count=500, max_labels_count=500, max_bars_back=2000)
 
 // ============================================================
-// MARK XAUUSD UZUN HEDEF v2
-// Taban: MARK SURGE PRO (ciddi hareket oncesi) motoru.
-// Amac: XAUUSD icin UZUN HEDEFLI AL/SAT sinyalleri.
-// Kisa yerel (lokal) sinyaller FILTRELENIR.
-// Sadece sinyal (kare/dikdortgen YOK). Repaint YOK.
+// MARK XAUUSD UZUN HEDEF v3
+// Amac: XAUUSD icin SADECE buyuk (ciddi) hareket baslangicinda
+// AL/SAT sinyali. Kisa yerel / accumulation bolgesi sinyalleri
+// FILTRELENIR. Sadece sinyal (kare/dikdortgen YOK). Repaint YOK.
 // ============================================================
 
 // ===== GIRISLER =====
 gS = "Sinyal Motoru"
 atrLen   = input.int(14,  "ATR periyodu",            5,  50,  group = gS)
-sqLen    = input.int(20,  "Sikisma penceresi",       5,  50,  group = gS)
-sqMax    = input.float(3.0, "Sikisma esigi (range/ATR)", 0.1, 10.0, group = gS)
-brkLen   = input.int(6,   "Kirilim penceresi",       2,  30,  group = gS)
-bodyMult = input.float(1.2, "Govde carpani (ATR)",    0.1, 5.0,  group = gS)
-clvMin   = input.float(0.75, "Kapanis konumu (0-1)",  0.5, 1.0,  group = gS)
+sqLen    = input.int(30,  "Sikisma penceresi",       10, 60,  group = gS)
+sqMax    = input.float(2.0, "Sikisma esigi (range/ATR)", 0.1, 10.0, group = gS)
+brkLen   = input.int(20,  "Kirilim penceresi (major)", 5,  50,  group = gS)
+bodyMult = input.float(1.8, "Govde carpani (ATR)",    0.1, 5.0,  group = gS)
+clvMin   = input.float(0.85, "Kapanis konumu (0-1)",  0.5, 1.0,  group = gS)
 volLen   = input.int(20,  "Hacim ortalamasi",        5,  50,  group = gS)
-volMult  = input.float(1.3, "Hacim carpani",          0.1, 5.0,  group = gS)
-cool     = input.int(10,  "Ayni yon bekleme (bar)",   1,  100, group = gS)
+volMult  = input.float(2.0, "Hacim carpani",          0.1, 5.0,  group = gS)
+expMult  = input.float(1.5, "Expansion (bar range/ATR)", 0.5, 5.0, group = gS)
+cool     = input.int(25,  "Ayni yon bekleme (bar)",   5,  200, group = gS)
 
 gF = "Filtreler"
 useMtf   = input.bool(true,  "4H trend filtresi (EMA200)", group = gF)
@@ -27,10 +27,11 @@ mtfTf    = input.timeframe("240", "Trend zaman dilimi",     group = gF)
 emaLen   = input.int(200, "Trend EMA", 50, 400,            group = gF)
 useSq    = input.bool(true,  "Sikisma sarti",               group = gF)
 useVol   = input.bool(true,  "Hacim onayi",                 group = gF)
+useExp   = input.bool(true,  "Expansion (buyuk bar) sarti", group = gF)
 
 gT = "Hedefler (ATR carpani)"
 tp1Mult  = input.float(1.0, "TP1",  0.1, 10.0, group = gT)
-tp2Mult  = input.float(2.5, "TP2 - UZUN HEDEF", 0.1, 10.0, group = gT)
+tp2Mult  = input.float(3.0, "TP2 - UZUN HEDEF", 0.1, 10.0, group = gT)
 slBuf    = input.float(0.25, "SL tamponu", 0.05, 2.0, group = gT)
 
 gV = "Gorsel"
@@ -41,6 +42,7 @@ showLbl  = input.bool(true, "AL/SAT etiketi", group = gV)
 atr  = ta.atr(atrLen)
 barR = math.max(high - low, syminfo.mintick)
 body = math.abs(close - open) / atr
+rng  = (high - low) / atr
 
 // 4H trend
 emaM = request.security(syminfo.tickerid, mtfTf, ta.ema(close, emaLen)[1], lookahead = barmerge.lookahead_off)
@@ -50,13 +52,13 @@ trDn = not useMtf or close < emaM
 // Hacim
 volOk = volume >= ta.sma(volume, volLen) * volMult
 
-// Sikisma
+// Sikisma (uzun pencere)
 rngHi = ta.highest(high, sqLen)
 rngLo = ta.lowest(low, sqLen)
 sq    = (rngHi - rngLo) / atr
 sqOk  = not useSq or sq <= sqMax
 
-// Kirilim (breakout)
+// Major kirilim (uzun pencere - lokal degil)
 brkUp = close > ta.highest(high, brkLen)[1]
 brkDn = close < ta.lowest(low, brkLen)[1]
 
@@ -64,9 +66,12 @@ brkDn = close < ta.lowest(low, brkLen)[1]
 clvU = (close - low) / barR
 clvD = (high - close) / barR
 
+// Expansion: bar kendisi buyuk olmali (kisa yerel engeli)
+expOk = not useExp or rng >= expMult
+
 // ===== SINYAL KOSULLARI =====
-rawL = body >= bodyMult and volOk and clvU >= clvMin and brkUp and trUp and sqOk
-rawS = body >= bodyMult and volOk and clvD >= clvMin and brkDn and trDn and sqOk
+rawL = body >= bodyMult and volOk and clvU >= clvMin and brkUp and trUp and sqOk and expOk
+rawS = body >= bodyMult and volOk and clvD >= clvMin and brkDn and trDn and sqOk and expOk
 
 var int lastL = -9999
 var int lastS = -9999
