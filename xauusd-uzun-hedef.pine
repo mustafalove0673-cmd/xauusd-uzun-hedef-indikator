@@ -1,100 +1,81 @@
 //@version=6
-indicator("MARK XAUUSD UZUN HEDEF", shorttitle="XAU UZUN", overlay=true, max_lines_count=500, max_labels_count=500, max_boxes_count=200, max_bars_back=2000)
+indicator("MARK XAUUSD UZUN HEDEF v2", shorttitle="XAU UZUN", overlay=true, max_lines_count=500, max_labels_count=500, max_bars_back=2000)
 
 // ============================================================
-// MARK XAUUSD UZUN HEDEF
-// Amac: XAUUSD (altin) icin UZUN HEDEFLI AL/SAT sinyalleri.
-// Kisa yerel (lokal) sinyaller FILTRELENIR - sadece buyuk hareket
-// baslangicinda sinyal uretilir. Her sinyal uzun hedefe (TP2) ulasmayi
-// hedefler. Repaint YOK (barstate.isconfirmed + lookahead_off).
+// MARK XAUUSD UZUN HEDEF v2
+// Taban: MARK SURGE PRO (ciddi hareket oncesi) motoru.
+// Amac: XAUUSD icin UZUN HEDEFLI AL/SAT sinyalleri.
+// Kisa yerel (lokal) sinyaller FILTRELENIR.
+// Sadece sinyal (kare/dikdortgen YOK). Repaint YOK.
 // ============================================================
 
 // ===== GIRISLER =====
 gS = "Sinyal Motoru"
-atrLen   = input.int(14,  "ATR periyodu",            5,    50,   group = gS)
-sqMax    = input.float(2.5, "Sikisma esigi (range/ATR)", 0.1, 10.0, group = gS)
-bodyMult = input.float(1.5, "Govde carpani (ATR)",    0.1,  5.0,  group = gS)
-volMult  = input.float(1.5, "Hacim carpani (ort)",    0.1,  5.0,  group = gS)
-minSweep = input.float(0.30, "Min sweep derinligi (ATR)", 0.05, 2.0, group = gS)
-minBars  = input.int(20,   "Sinyaller arasi min bar",  5,   200,  group = gS)
+atrLen   = input.int(14,  "ATR periyodu",            5,  50,  group = gS)
+sqLen    = input.int(20,  "Sikisma penceresi",       5,  50,  group = gS)
+sqMax    = input.float(3.0, "Sikisma esigi (range/ATR)", 0.1, 10.0, group = gS)
+brkLen   = input.int(6,   "Kirilim penceresi",       2,  30,  group = gS)
+bodyMult = input.float(1.2, "Govde carpani (ATR)",    0.1, 5.0,  group = gS)
+clvMin   = input.float(0.75, "Kapanis konumu (0-1)",  0.5, 1.0,  group = gS)
+volLen   = input.int(20,  "Hacim ortalamasi",        5,  50,  group = gS)
+volMult  = input.float(1.3, "Hacim carpani",          0.1, 5.0,  group = gS)
+cool     = input.int(10,  "Ayni yon bekleme (bar)",   1,  100, group = gS)
 
 gF = "Filtreler"
-useMtf   = input.bool(true,  "4H trend filtresi (EMA200)",   group = gF)
-useVol   = input.bool(true,  "Hacim onayi",                  group = gF)
-useSq    = input.bool(true,  "Sikisma (compression) onayi", group = gF)
-useDeep  = input.bool(true,  "Derin sweep onayi (bariz)",    group = gF)
+useMtf   = input.bool(true,  "4H trend filtresi (EMA200)", group = gF)
+mtfTf    = input.timeframe("240", "Trend zaman dilimi",     group = gF)
+emaLen   = input.int(200, "Trend EMA", 50, 400,            group = gF)
+useSq    = input.bool(true,  "Sikisma sarti",               group = gF)
+useVol   = input.bool(true,  "Hacim onayi",                 group = gF)
 
 gT = "Hedefler (ATR carpani)"
 tp1Mult  = input.float(1.0, "TP1",  0.1, 10.0, group = gT)
-tp2Mult  = input.float(2.0, "TP2 - UZUN HEDEF", 0.1, 10.0, group = gT)
+tp2Mult  = input.float(2.5, "TP2 - UZUN HEDEF", 0.1, 10.0, group = gT)
 slBuf    = input.float(0.25, "SL tamponu", 0.05, 2.0, group = gT)
 
 gV = "Gorsel"
-showBox  = input.bool(true, "Order block kutusu", group = gV)
-showTp   = input.bool(true, "TP noktalari",       group = gV)
-showLbl  = input.bool(true, "AL/SAT etiketi",     group = gV)
+showTp   = input.bool(true, "TP noktalari",   group = gV)
+showLbl  = input.bool(true, "AL/SAT etiketi", group = gV)
 
 // ===== HESAPLAMALAR =====
-atr = ta.atr(atrLen)
+atr  = ta.atr(atrLen)
+barR = math.max(high - low, syminfo.mintick)
+body = math.abs(close - open) / atr
 
-// 4H trend filtresi (repaint yok)
-ema200_4h = request.security(syminfo.tickerid, "240", ta.ema(close, 200), lookahead = barmerge.lookahead_off)
-trendBull = close > ema200_4h
-trendBear = close < ema200_4h
+// 4H trend
+emaM = request.security(syminfo.tickerid, mtfTf, ta.ema(close, emaLen)[1], lookahead = barmerge.lookahead_off)
+trUp = not useMtf or close > emaM
+trDn = not useMtf or close < emaM
 
-// Hacim ortalamasi
-volAvg   = ta.sma(volume, 20)
-volSpike = volume > volAvg * volMult
+// Hacim
+volOk = volume >= ta.sma(volume, volLen) * volMult
 
-// Sikisma: son 8 barda range / ATR
-rangeN   = ta.highest(high, 8) - ta.lowest(low, 8)
-sqRatio  = rangeN / atr
-// son 8 bar icinde sikisma oldu mu
-sqRecent = ta.lowest(sqRatio, 8) < sqMax
+// Sikisma
+rngHi = ta.highest(high, sqLen)
+rngLo = ta.lowest(low, sqLen)
+sq    = (rngHi - rngLo) / atr
+sqOk  = not useSq or sq <= sqMax
 
-// Govde
-bodySize = math.abs(close - open)
-bigBody  = bodySize > atr * bodyMult
+// Kirilim (breakout)
+brkUp = close > ta.highest(high, brkLen)[1]
+brkDn = close < ta.lowest(low, brkLen)[1]
 
-// Pivot (5/5) - onay 5 bar sonra gelir, lookahead yok
-ph = ta.pivothigh(high, 5, 5)
-pl = ta.pivotlow(low, 5, 5)
-
-// Son swing high/low takibi
-var float lastPH = na
-var float lastPL = na
-if not na(ph)
-    lastPH := ph
-if not na(pl)
-    lastPL := pl
-
-// Sweep derinligi
-sweepLowDepth  = not na(lastPL) ? (lastPL - low) / atr  : 0.0
-sweepHighDepth = not na(lastPH) ? (high - lastPH) / atr : 0.0
+// Kapanis konumu (CLV)
+clvU = (close - low) / barR
+clvD = (high - close) / barR
 
 // ===== SINYAL KOSULLARI =====
-sweepLow  = not na(lastPL) and low < lastPL - minSweep * atr and close > lastPL
-sweepHigh = not na(lastPH) and high > lastPH + minSweep * atr and close < lastPH
+rawL = body >= bodyMult and volOk and clvU >= clvMin and brkUp and trUp and sqOk
+rawS = body >= bodyMult and volOk and clvD >= clvMin and brkDn and trDn and sqOk
 
-deepOkBuy  = not useDeep or sweepLowDepth  >= minSweep
-deepOkSell = not useDeep or sweepHighDepth >= minSweep
-
-trendOkBuy  = not useMtf or trendBull
-trendOkSell = not useMtf or trendBear
-
-sqOk   = not useSq  or sqRecent
-volOk  = not useVol or volSpike
-
-buyCond  = sweepLow  and bigBody and trendOkBuy  and sqOk and volOk and deepOkBuy
-sellCond = sweepHigh and bigBody and trendOkSell and sqOk and volOk and deepOkSell
-
-// Sinyaller arasi min bar
-var int lastSigBar = na
-sigAllowed = na(lastSigBar) or (bar_index - lastSigBar) >= minBars
-buySig  = buyCond  and sigAllowed and barstate.isconfirmed
-sellSig = sellCond and sigAllowed and barstate.isconfirmed
-if buySig or sellSig
-    lastSigBar := bar_index
+var int lastL = -9999
+var int lastS = -9999
+buySig  = rawL and barstate.isconfirmed and (bar_index - lastL) >= cool
+sellSig = rawS and barstate.isconfirmed and (bar_index - lastS) >= cool
+if buySig
+    lastL := bar_index
+if sellSig
+    lastS := bar_index
 
 // ===== HEDEFLER =====
 buySL   = low  - slBuf * atr
@@ -104,17 +85,12 @@ buyTP2  = close + tp2Mult * atr   // UZUN HEDEF
 sellTP1 = close - tp1Mult * atr
 sellTP2 = close - tp2Mult * atr   // UZUN HEDEF
 
-// ===== GORSEL =====
+// ===== GORSEL (sadece sinyal, kare/dikdortgen YOK) =====
 plotshape(buySig,  title="AL",  style=shape.circle, location=location.belowbar, color=color.new(color.lime, 0), size=size.small, text="AL")
 plotshape(sellSig, title="SAT", style=shape.circle, location=location.abovebar, color=color.new(color.red,  0), size=size.small, text="SAT")
 
 plot(showTp and buySig  ? buyTP2  : na, "Buy TP2 (uzun hedef)",  color=color.new(color.lime, 30), style=plot.style_circles, linewidth=2)
 plot(showTp and sellSig ? sellTP2 : na, "Sell TP2 (uzun hedef)", color=color.new(color.red,   30), style=plot.style_circles, linewidth=2)
-
-if showBox and buySig
-    box.new(left=bar_index - 1, top=high, right=bar_index + 8, bottom=low, border_color=color.new(color.lime, 50), bgcolor=color.new(color.lime, 92))
-if showBox and sellSig
-    box.new(left=bar_index - 1, top=high, right=bar_index + 8, bottom=low, border_color=color.new(color.red,  50), bgcolor=color.new(color.red,  92))
 
 if showLbl and buySig
     label.new(bar_index, low, "AL\nTP2: " + str.tostring(buyTP2, "#.##") + "\nSL: " + str.tostring(buySL, "#.##"), style=label.style_label_up, color=color.new(color.lime, 0), textcolor=color.white, size=size.small)
